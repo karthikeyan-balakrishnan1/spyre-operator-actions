@@ -4,23 +4,24 @@
 # +-------------------------------------------------------------------+
 
 name: 'Capture Component Logs'
-description: 'Start background log capture for Spyre components using stern'
 
-inputs:
-  log-directory:
-    description: 'Directory to store log files'
-    required: false
-    default: 'logs'
-  since:
-    description: 'Time duration to capture logs (e.g., 1h, 30m)'
-    required: false
-    default: '1h'
+on:
+  workflow_call:
+    inputs:
+      log-directory:
+        description: 'Directory to store log files'
+        required: false
+        type: string
+        default: 'logs'
+      since:
+        description: 'Time duration to capture logs (e.g., 1h, 30m)'
+        required: false
+        type: string
+        default: '1h'
 
-runs:
-  using: 'composite'
-  steps:
+jobs:
+  capture-logs:
     - name: Setup log capture
-      shell: bash
       run: |
         #!/bin/bash -e
 
