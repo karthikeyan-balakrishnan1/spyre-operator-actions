@@ -4,19 +4,19 @@
 # +-------------------------------------------------------------------+
 
 name: 'Install Operator SDK'
-description: 'Install operator-sdk CLI tool with GPG verification'
 
-inputs:
-  version:
-    description: 'Operator SDK version to install'
-    required: false
-    default: 'v1.38.0'
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Operator SDK version to install'
+        required: false
+        type: string
+        default: 'v1.38.0'
 
-runs:
-  using: 'composite'
-  steps:
+jobs:
+  install-operator-sdk:
     - name: Install operator-sdk
-      shell: bash
       run: |
         if ! command -v operator-sdk &> /dev/null; then
           #!/bin/bash -e
