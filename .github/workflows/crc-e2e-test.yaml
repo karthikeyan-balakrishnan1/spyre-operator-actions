@@ -9,10 +9,20 @@ on:
   workflow_dispatch:
     inputs:
       runner:
-        description: 'GitHub runner to use for building the image'
+        description: "Runner to use"
         required: false
         type: string
-        default: 'ubuntu-latest'
+        default: "ubuntu-latest"
+      repository:
+        description: "Repository to checkout"
+        required: false
+        type: string
+        default: "ibm-aiu/spyre-operator"
+      path:
+        description: "Path to checkout into"
+        required: false
+        type: string
+        default: "spyre-operator"
       branch-name:
         description: "Branch name to checkout from spyre-operator repo"
         required: false
@@ -36,16 +46,6 @@ on:
         description: "Operator channel"
         required: false
         type: string
-      repository:
-        description: "Repository to clone for CRC end-to-end tests"
-        required: false
-        type: string
-        default: 'ibm-aiu/spyre-operator'
-      path:
-        description: "Repository path cloned for CRC end-to-end tests"
-        required: false
-        type: string
-        default: 'spyre-operator'
   push:
     branches:
     - '**'
