@@ -342,6 +342,7 @@ jobs:
       shell: bash
       run: |
         #!/bin/bash -eu
+        crc config set timeout 900
         oc patch mcp master --type=merge -p '{"spec":{"paused":true}}'
         oc get mcp master -o jsonpath="{.status.configuration} {.spec.configuration}"
         echo "Apply MachineConfig"
