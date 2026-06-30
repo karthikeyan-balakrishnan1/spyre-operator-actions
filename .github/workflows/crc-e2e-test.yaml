@@ -6,47 +6,7 @@
 name: CRC End to End Test
 
 on:
-  workflow_dispatch:
-    inputs:
-      runner:
-        description: "Runner to use"
-        required: false
-        type: string
-        default: "ubuntu-latest"
-      repository:
-        description: "Repository to checkout"
-        required: false
-        type: string
-        default: "ibm-aiu/spyre-operator"
-      path:
-        description: "Path to checkout into"
-        required: false
-        type: string
-        default: "spyre-operator"
-      branch-name:
-        description: "Branch name to checkout from spyre-operator repo"
-        required: false
-        type: string
-        default: "main"
-      registry:
-        description: 'Container registry to push to (e.g., ghcr.io, docker.io)'
-        required: false
-        type: string
-        default: 'ghcr.io/ibm-aiu'
-      pr-url:
-        description: 'GitHub Pull Request URL to test. If provided, will fetch and
-          test the PR branch.'
-        required: false
-        type: string
-      operator-version:
-        description: "Spyre operator tag to run in test"
-        required: false
-        type: string
-      operator-channel:
-        description: "Operator channel"
-        required: false
-        type: string
-  # workflow_call:
+  # workflow_dispatch:
   #   inputs:
   #     runner:
   #       description: "Runner to use"
@@ -86,9 +46,49 @@ on:
   #       description: "Operator channel"
   #       required: false
   #       type: string
-  #   secrets:
-  #     CRC_PULL_SECRET_SUNYACH:
-  #       required: true
+  workflow_call:
+    inputs:
+      runner:
+        description: "Runner to use"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+      repository:
+        description: "Repository to checkout"
+        required: false
+        type: string
+        default: "ibm-aiu/spyre-operator"
+      path:
+        description: "Path to checkout into"
+        required: false
+        type: string
+        default: "spyre-operator"
+      branch-name:
+        description: "Branch name to checkout from spyre-operator repo"
+        required: false
+        type: string
+        default: "main"
+      registry:
+        description: 'Container registry to push to (e.g., ghcr.io, docker.io)'
+        required: false
+        type: string
+        default: 'ghcr.io/ibm-aiu'
+      pr-url:
+        description: 'GitHub Pull Request URL to test. If provided, will fetch and
+          test the PR branch.'
+        required: false
+        type: string
+      operator-version:
+        description: "Spyre operator tag to run in test"
+        required: false
+        type: string
+      operator-channel:
+        description: "Operator channel"
+        required: false
+        type: string
+    secrets:
+      CRC_PULL_SECRET_SUNYACH:
+        required: true
   push:
     branches:
     - '**'
@@ -102,7 +102,7 @@ env:
 
 jobs:
   crc-test:
-    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner }}
     env:
       REGISTRY: ${{ inputs.registry || 'ghcr.io/ibm-aiu' }}
     steps:
@@ -119,7 +119,7 @@ jobs:
 
         # Set default if empty
         if [ -z "$BRANCH_NAME" ]; then
-          BRANCH_NAME="main"
+          BRANCH_NAME="image-build"
         fi
 
         echo "branch-name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
