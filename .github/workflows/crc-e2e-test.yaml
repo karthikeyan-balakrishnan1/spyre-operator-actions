@@ -102,7 +102,7 @@ env:
 
 jobs:
   crc-test:
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     env:
       REGISTRY: ${{ inputs.registry || 'ghcr.io/ibm-aiu' }}
     steps:
