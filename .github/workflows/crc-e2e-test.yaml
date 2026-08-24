@@ -8,6 +8,11 @@ name: CRC End to End Test
 on:
   workflow_dispatch:
     inputs:
+      runner:
+        description: 'GitHub runner to use for building the image'
+        required: false
+        type: string
+        default: 'ubuntu-24.04'
       branch-name:
         description: "Branch name to checkout from spyre-operator repo"
         required: false
@@ -31,6 +36,16 @@ on:
         description: "Operator channel"
         required: false
         type: string
+      repository:
+        description: "Repository to clone for CRC end-to-end tests"
+        required: false
+        type: string
+        default: 'ibm-aiu/spyre-operator'
+      path:
+        description: "Repository path cloned for CRC end-to-end tests"
+        required: false
+        type: string
+        default: 'spyre-operator'
   push:
     branches:
     - '**'
@@ -44,28 +59,22 @@ env:
 
 jobs:
   crc-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     env:
       REGISTRY: ${{ inputs.registry || 'ghcr.io/ibm-aiu' }}
     steps:
     - name: Checkout spyre-operator-actions repository
       uses: actions/checkout@v6
 
-    - name: Set branch name
-      id: set-branch
-      env:
-        INPUT_BRANCH_NAME: ${{ inputs.branch-name }}
-      run: |
-        # Use input value if provided (workflow_dispatch), otherwise use default
-        BRANCH_NAME="${INPUT_BRANCH_NAME}"
-
-        # Set default if empty
-        if [ -z "$BRANCH_NAME" ]; then
-          BRANCH_NAME="image-build"
-        fi
-
-        echo "branch-name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
-        echo "Using branch: ${BRANCH_NAME}"
+    # Reusable action: Resolve branch name, operator version, and operator channel
+    # Falls back to sensible defaults when triggered by a push event
+    - name: Resolve E2E parameters
+      id: params
+      uses: ./.github/actions/resolve-e2e-params
+      with:
+        branch-name: ${{ inputs.branch-name }}
+        operator-version: ${{ inputs.operator-version }}
+        operator-channel: ${{ inputs.operator-channel }}
 
     # Reusable action: Install Operator SDK CLI tool with GPG verification
     - name: Install operator-sdk
@@ -73,102 +82,23 @@ jobs:
       with:
         version: v1.38.0
 
-    - name: Checkout spyre-operator repository
+    - name: Checkout ${{ inputs.repository }} repository
       uses: actions/checkout@v6
       with:
-        repository: ibm-aiu/spyre-operator
-        ref: ${{ steps.set-branch.outputs.branch-name }}
+        repository: ${{ inputs.repository }}
+        ref: ${{ steps.params.outputs.branch-name }}
         token: ${{ secrets.GITHUB_TOKEN }}
-        path: spyre-operator
+        path: ${{ inputs.path }}
 
-    - name: Set operator version and channel
-      id: set-params
-      env:
-        INPUT_OPERATOR_VERSION: ${{ inputs.operator-version }}
-        INPUT_OPERATOR_CHANNEL: ${{ inputs.operator-channel }}
-      run: |
-        # Use input values if provided (workflow_dispatch), otherwise use defaults (push)
-        OPERATOR_VERSION="${INPUT_OPERATOR_VERSION}"
-        OPERATOR_CHANNEL="${INPUT_OPERATOR_CHANNEL}"
-
-        # Set defaults if empty (for push events)
-        if [ -z "$OPERATOR_VERSION" ]; then
-          OPERATOR_VERSION="1.3.0-dev"
-        fi
-
-        if [ -z "$OPERATOR_CHANNEL" ]; then
-          OPERATOR_CHANNEL="fast-v1.3"
-        fi
-
-        echo "operator-version=${OPERATOR_VERSION}" >> $GITHUB_OUTPUT
-        echo "operator-channel=${OPERATOR_CHANNEL}" >> $GITHUB_OUTPUT
-
-        echo "Using operator version: ${OPERATOR_VERSION}"
-        echo "Using operator channel: ${OPERATOR_CHANNEL}"
-
+    # Reusable action: Clone the PR branch (if provided) and build its container image
     - name: Clone PR from GitHub and Build
       id: clone-pr
       if: ${{ inputs.pr-url != '' }}
-      env:
-        PR_URL: ${{ inputs.pr-url }}
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        #!/bin/bash -eu
-
-        echo "PR_URL: ${PR_URL}"
-
-        # Extract component name and PR number from PR URL
-        COMPONENT_REPO=$(echo "${PR_URL}" | sed -n 's|https://github.com/[^/]*/\([^/]*\)/pull/.*|\1|p')
-        PR_NUMBER=$(echo "${PR_URL}" | grep -oP 'pull/\K[0-9]+')
-        REPO_ORG=$(echo "${PR_URL}" | sed -n 's|https://github.com/\([^/]*\)/.*|\1|p')
-
-        echo "Component Repository: ${COMPONENT_REPO}"
-        echo "PR Number: ${PR_NUMBER}"
-        echo "Repository Organization: ${REPO_ORG}"
-
-        # Clone the component repository
-        rm -rf ${COMPONENT_REPO} || true
-        git clone https://github.com/${REPO_ORG}/${COMPONENT_REPO}.git
-        cd ${COMPONENT_REPO}
-
-        # Fetch and checkout the PR
-        echo "Fetching PR ${PR_NUMBER}..."
-        git fetch origin pull/${PR_NUMBER}/head:pr-${PR_NUMBER}
-        git checkout pr-${PR_NUMBER}
-        git log -1 --oneline
-
-        export COMPONENT_TAG=$(cat VERSION)-pr-${PR_NUMBER}
-        if [ "${COMPONENT_REPO}" = "spyre-scheduler-plugins" ] ; then
-            export COMPONENT_IMAGE=${CRC_REGISTRY}/openshift-secondary-scheduler-operator/spyre-scheduler:${COMPONENT_TAG}
-        else
-            export COMPONENT_IMAGE=${CRC_REGISTRY}/spyre-operator/${COMPONENT_REPO}:${COMPONENT_TAG}
-        fi
-        echo "image is set: ${COMPONENT_IMAGE}"
-
-        # Set outputs for later steps
-        echo "component-repo=${COMPONENT_REPO}" >> $GITHUB_OUTPUT
-        echo "component-tag=${COMPONENT_TAG}" >> $GITHUB_OUTPUT
-
-        cd ..
-        cd ${COMPONENT_REPO}
-
-        # Special handling for spyre-operator - build operator, bundle, and catalog
-        if [ "${COMPONENT_REPO}" = "spyre-operator" ]; then
-            echo "Building spyre-operator with bundle (catalog will be built after push)..."
-            TEST_REGISTRY="image-registry.openshift-image-registry.svc:5000/spyre-operator"
-            make docker-build VERSION=${COMPONENT_TAG} REGISTRY=${TEST_REGISTRY}
-            make bundle bundle-build VERSION=${COMPONENT_TAG} REGISTRY=${TEST_REGISTRY}
-            docker tag ${TEST_REGISTRY}/spyre-operator:${COMPONENT_TAG} ${CRC_REGISTRY}/spyre-operator/spyre-operator:${COMPONENT_TAG}
-            docker tag ${TEST_REGISTRY}/spyre-operator-bundle:${COMPONENT_TAG} ${CRC_REGISTRY}/openshift-marketplace/spyre-operator-bundle:${COMPONENT_TAG}
-        else
-            make docker-build IMAGE=${COMPONENT_IMAGE}
-        fi
-
-    - name: Download scripts
-      working-directory: spyre-operator
-      run: |
-        curl -sSL -o patch-e2e-config.bash https://raw.githubusercontent.com/ibm-aiu/spyre-operator-actions/image-build/scripts/patch-e2e-config.bash
-        chmod +x patch-e2e-config.bash
+      uses: ./.github/actions/clone-pr-and-build
+      with:
+        pr-url: ${{ inputs.pr-url }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        crc-registry: ${{ env.CRC_REGISTRY }}
 
     # Reusable action: Install Stern CLI for Kubernetes log tailing
     - name: Install Stern
@@ -176,88 +106,24 @@ jobs:
       with:
         version: '1.30.0'
 
+    # Reusable action: Push the built component image (and spyre-operator bundle/catalog) to CRC
     - name: Push test component image to CRC
       if: ${{ inputs.pr-url != '' }}
-      env:
-        COMPONENT_REPO: ${{ steps.clone-pr.outputs.component-repo }}
-        COMPONENT_TAG: ${{ steps.clone-pr.outputs.component-tag }}
-      run: |
-        #!/bin/bash -eu
+      uses: ./.github/actions/push-component-image
+      with:
+        component-repo: ${{ steps.clone-pr.outputs.component-repo }}
+        component-tag: ${{ steps.clone-pr.outputs.component-tag }}
+        crc-registry: ${{ env.CRC_REGISTRY }}
 
-        # Check if component repo is set, skip if not
-        if [ -z "${COMPONENT_REPO}" ]; then
-            echo "No component repo found, skipping push step"
-            exit 0
-        fi
-
-        cd ${COMPONENT_REPO}
-
-        # Login to CRC
-        oc login -u kubeadmin -p $(cat ~/.crc/machines/crc/kubeadmin-password) https://api.crc.testing:6443 --insecure-skip-tls-verify=true
-
-        # Create spyre-operator namespace if it doesn't exist
-        oc new-project spyre-operator || oc project spyre-operator
-
-        # Create openshift-secondary-scheduler-operator namespace if it doesn't exist
-        oc create namespace openshift-secondary-scheduler-operator || true
-
-        # Login to CRC registry
-        oc registry login --insecure=true
-
-        if [ "${COMPONENT_REPO}" = "spyre-scheduler-plugins" ] ; then
-            export COMPONENT_IMAGE=${CRC_REGISTRY}/openshift-secondary-scheduler-operator/spyre-scheduler:${COMPONENT_TAG}
-        else
-            export COMPONENT_IMAGE=${CRC_REGISTRY}/spyre-operator/${COMPONENT_REPO}:${COMPONENT_TAG}
-        fi
-
-
-        # Push to CRC registry with TLS verification disabled for insecure registry
-        echo "Pushing ${COMPONENT_REPO} image to CRC..."
-        docker push ${COMPONENT_IMAGE}
-
-        # Special handling for spyre-operator - also push bundle and catalog
-        if [ "${COMPONENT_REPO}" = "spyre-operator" ]; then
-            CRC_CATALOG_REGISTRY=${CRC_REGISTRY}/openshift-marketplace
-            TEST_REGISTRY="image-registry.openshift-image-registry.svc:5000/spyre-operator"
-            TEST_CATALOG_REGISTRY="image-registry.openshift-image-registry.svc:5000/openshift-marketplace"
-            echo "Pushing spyre-operator bundle and catalog images to CRC..."
-            docker push ${CRC_CATALOG_REGISTRY}/spyre-operator-bundle:${COMPONENT_TAG}
-            make opm fbc-bundle-add fbc-build-setup VERSION=${COMPONENT_TAG} REGISTRY=${CRC_CATALOG_REGISTRY}
-            # Replace CRC_REGISTRY with local TEST_REGISTRY
-            yq eval -i "(.. | select(type == \"!!str\")) |= sub(strenv(CRC_REGISTRY) + \"/spyre-operator\", strenv(TEST_REGISTRY))" catalog/spyre-operator/spyre-operator.yaml
-            yq eval -i "(.. | select(type == \"!!str\")) |= sub(strenv(CRC_REGISTRY) + \"/openshift-marketplace\", strenv(TEST_CATALOG_REGISTRY))" catalog/spyre-operator/spyre-operator.yaml
-            cat catalog/spyre-operator/spyre-operator.yaml
-            make fbc-docker-build VERSION=${COMPONENT_TAG} REGISTRY=${CRC_CATALOG_REGISTRY}
-            docker push ${CRC_CATALOG_REGISTRY}/spyre-operator-catalog:${COMPONENT_TAG}
-        fi
-
+    # Reusable action: Download and apply the e2e test config patch
     - name: End to end test prep
-      working-directory: spyre-operator
-      env:
-        TEST_REGISTRY: "image-registry.openshift-image-registry.svc:5000/spyre-operator"
-        TEST_CATALOG_REGISTRY: "image-registry.openshift-image-registry.svc:5000/openshift-marketplace"
-        TEST_SECONDARY_SCHED_REGISTRY: "image-registry.openshift-image-registry.svc:5000/openshift-secondary-scheduler-operator"
-        DEVICE_PLUGIN_TAG: ${{ steps.set-params.outputs.operator-version }}
-        SCHEDULER_PLUGIN_TAG: ${{ steps.set-params.outputs.operator-version }}
-        VALIDATOR_TAG: ${{ steps.set-params.outputs.operator-version }}
-        HEALTH_CHECKER_TAG: ${{ steps.set-params.outputs.operator-version }}
-        OPERATOR_TAG: ${{ steps.set-params.outputs.operator-version }}
-        BUNDLE_TAG: ${{ steps.set-params.outputs.operator-version }}
-        CATALOG_TAG: ${{ steps.set-params.outputs.operator-version }}
-        OPERATOR_CHANNEL: ${{ steps.set-params.outputs.operator-channel }}
-        TEST_REPO: ${{ steps.clone-pr.outputs.component-repo }}
-        TEST_TAG: ${{ steps.clone-pr.outputs.component-tag }}
-      run: |
-        #!/bin/bash -eu
-
-        # Patch e2e config
-        bash patch-e2e-config.bash
-        rm -f patch-e2e-config.bash
-
-        echo "End-to-End Config:"
-        echo "-------------------------------------------------------------------------------------------"
-        yq '.' test/config.yaml
-        echo "-------------------------------------------------------------------------------------------"
+      uses: ./.github/actions/prepare-e2e-config
+      with:
+        working-directory: ${{ inputs.path }}
+        operator-version: ${{ steps.params.outputs.operator-version }}
+        operator-channel: ${{ steps.params.outputs.operator-channel }}
+        test-repo: ${{ steps.clone-pr.outputs.component-repo }}
+        test-tag: ${{ steps.clone-pr.outputs.component-tag }}
 
     - name: Set up CRC
       uses: crc-org/crc-github-action@v1
@@ -278,44 +144,13 @@ jobs:
         registry-username: ${{ github.actor }}
         registry-token: ${{ secrets.GITHUB_TOKEN }}
 
+    # Reusable action: Apply the Spyre device plugin SELinux MachineConfig
+    # and restart the CRC cluster for it to take effect
     - name: Apply MachineConfig
       timeout-minutes: 30
-      working-directory: spyre-operator
-      shell: bash
-      run: |
-        #!/bin/bash -eu
-        oc patch mcp master --type=merge -p '{"spec":{"paused":true}}'
-        oc get mcp master -o jsonpath="{.status.configuration} {.spec.configuration}"
-        echo "Apply MachineConfig"
-        cat config/machineconfig/amd64/50-spyre-device-plugin-selinux-minimal.yaml | sed -e 's@machineconfiguration.openshift.io/role: worker@machineconfiguration.openshift.io/role: master@g' |  oc apply -f -
-        sleep 10
-        oc get mcp master -o jsonpath="{.status.configuration} {.spec.configuration}"
-        oc patch mcp master --type=merge -p '{"spec":{"paused":false}}'
-        sleep 60
-        sudo -su $USER crc stop -f
-        sleep 10
-        sudo -su $USER crc start
-        MAX_RETRIES=5
-        RETRY_COUNT=0
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if oc login -u kubeadmin -p $(cat ~/.crc/machines/crc/kubeadmin-password) https://api.crc.testing:6443 --insecure-skip-tls-verify=true ; then
-                echo "Successful re-login into openshift"
-                break
-            else
-                RETRY_COUNT=$((RETRY_COUNT + 1))
-                echo "Retrying login... (attempt $RETRY_COUNT/$MAX_RETRIES)"
-                sleep 180
-            fi
-        done
-        
-        if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-            echo "ERROR: Failed to login to CRC after $MAX_RETRIES attempts (5 minutes)"
-            echo "CRC failed to restart properly after MachineConfig application"
-            exit 1
-        fi
-        oc wait clusteroperator/image-registry --for=condition=Available=True --timeout=10m
-        oc get po -n openshift-marketplace
-        oc get mcp
+      uses: ./.github/actions/apply-machineconfig
+      with:
+        working-directory: ${{ inputs.path }}
 
     # Reusable action: Start background log capture for Spyre components
     # Captures logs from: spyre-operator, spyre-device-plugin, spyre-webhook-validator,
@@ -323,12 +158,12 @@ jobs:
     - name: Start log capture
       uses: ./.github/actions/capture-component-logs
       with:
-        log-directory: spyre-operator/logs
+        log-directory: ${{ inputs.path }}/logs
         since: 1h
 
     - name: Run E2E tests
       timeout-minutes: 70
-      working-directory: spyre-operator
+      working-directory: ${{ inputs.path }}
       run: |
         #!/bin/bash -e
         set -o pipefail
@@ -348,7 +183,7 @@ jobs:
       if: always()
       uses: ./.github/actions/capture-diagnostics
       with:
-        log-directory: spyre-operator/logs
+        log-directory: ${{ inputs.path }}/logs
         namespace: spyre-operator
         component: spyre-device-plugin
 
@@ -357,5 +192,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: component-logs
-        path: spyre-operator/logs/
+        path: ${{ inputs.path }}/logs/
         if-no-files-found: ignore
